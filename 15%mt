@@ -1,1 +1,55 @@
 15%mt
+#加载包
+#####################################
+library(DoubletFinder)
+library(Seurat)
+library(dplyr)
+library(stringr)
+library(cowplot)
+library(harmony)
+library(patchwork)
+#####################################
+
+#开始处理
+###################################################  Month:1
+##十八月雌性主动脉
+setwd("D:\\000sc_AGEING_ANALYSIS\\Feature\\M_1-3-6-12-18month\\RDS_Mouse")
+MA_18.data <- Read10X(data.dir = "D:\\000sc_AGEING_ANALYSIS\\Feature\\M_1-3-6-12-18month\\18MA\\filtered_feature_bc_matrix")  #改目录
+dense.size <- object.size(x = as.matrix(x = MA_18.data))
+sparse.size <- object.size(x = MA_18.data)
+MA_18 <- CreateSeuratObject(counts = MA_18.data, min.cells = 3, min.genes = 200, names.delim = "_", project = "10X_MA_18")
+MA_18@meta.data$gender<- "M"
+MA_18@meta.data$tissue<- "Aorta"
+MA_18@meta.data$age<- "18"
+MA_18[["percent.mt"]] <- PercentageFeatureSet(object = MA_18, pattern = "^mt-")     #注意MT
+MA_18 <- subset(x = MA_18, subset = nFeature_RNA > 200 & percent.mt < 15)     #这里取了线粒体15%
+MA_18 <- NormalizeData(object = MA_18, normalization.method = "LogNormalize", scale.factor = 10000)
+MA_18 <- FindVariableFeatures(object = MA_18, selection.method = "vst", nfeatures = 2500)   #这里设置为前2500
+all.genes <- rownames(MA_18)
+MA_18 <- ScaleData(MA_18, features = all.genes)
+MA_18 <- RunPCA(object= MA_18,npcs = 20,pc.genes=VariableFeatures(object = MA_18))  #这里取前20个PCs
+pcSelect=20
+MA_18 <- FindNeighbors(object = MA_18, dims = 1:pcSelect) 
+MA_18 <- FindClusters(object = MA_18, resolution = 0.4)    #注意每个样本的resolution的参数都不一样，需要根据细胞数量设定
+MA_18 <- RunUMAP(MA_18, dims = 1:pcSelect) #UMAP
+#去多胞
+sweep.res.list_SM <- paramSweep_v3(MA_18, PCs = 1:20)
+sweep.stats_SM <- summarizeSweep(sweep.res.list_SM, GT = FALSE)
+bcmvn_SM <- find.pK(sweep.stats_SM)
+pK_value <- as.numeric(as.character(bcmvn_SM$pK[bcmvn_SM$BCmetric == max(bcmvn_SM$BCmetric)]))
+annotations <- MA_18@meta.data$res.0.6
+homotypic.prop <- modelHomotypic(annotations)  
+nExp_poi <- round(0.031*length(MA_18@meta.data$orig.ident)) 
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+pN_value <- 0.25
+pANN_value <- paste0("pANN_",pN_value,"_",pK_value,'_',nExp_poi)
+MA_18 <- doubletFinder_v3(MA_18, PCs = 1:20, pN = pN_value, pK = pK_value, nExp = nExp_poi, reuse.pANN = FALSE)
+MA_18 <- doubletFinder_v3(MA_18, PCs = 1:20, pN = pN_value, pK = pK_value, nExp = nExp_poi.adj, reuse.pANN = pANN_value)	 
+MA_18@meta.data$Doublet <- MA_18@meta.data$DF.classifications_0.25_0.17_199
+table(MA_18@meta.data$DF.classifications_0.25_0.17_199)
+#保存
+saveRDS(MA_18, file = "./MA_18.rds")
+#删除占内存的
+rm(list = ls())
+gc()
+######################################################
